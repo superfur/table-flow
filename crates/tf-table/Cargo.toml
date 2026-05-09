@@ -1,0 +1,23 @@
+[package]
+name = "tf-table"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tf-core.workspace = true
+tf-vision.workspace = true
+tf-inference.workspace = true
+tf-state.workspace = true
+tf-rec.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+flume.workspace = true
+crossbeam.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true

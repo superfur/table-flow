@@ -1,0 +1,21 @@
+{
+  "name": "table-flow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TableFlow — real-time poker table state derivation + GTO/EV recommendation",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "pnpm --filter @table-flow/desktop dev",
+    "build": "pnpm --filter @table-flow/desktop build",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "lint": "pnpm -r --parallel lint",
+    "build:native": "cargo build --release -p tf-napi"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

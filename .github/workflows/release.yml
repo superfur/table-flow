@@ -1,0 +1,14 @@
+# TODO(detail-impl): 完整 release pipeline（Windows installer 打包、签名、上传）
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  placeholder:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "TODO release pipeline"

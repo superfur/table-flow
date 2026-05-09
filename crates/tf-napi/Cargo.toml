@@ -1,0 +1,31 @@
+[package]
+name = "tf-napi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tf-core.workspace = true
+tf-table.workspace = true
+tf-state.workspace = true
+tf-rec.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+once_cell.workspace = true
+
+# napi-rs 在 detail-impl 阶段引入；架构骨架阶段先注释掉
+# 避免 cargo check 时下载 napi 工具链
+# napi = { version = "=2.16", features = ["napi4", "tokio_rt"] }
+# napi-derive = "=2.16"
+
+[build-dependencies]
+# napi-build = "2"

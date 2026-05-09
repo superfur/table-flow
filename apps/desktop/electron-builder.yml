@@ -1,0 +1,10 @@
+# TODO(detail-impl): 完整打包配置（NSIS / 签名 / auto-update）
+appId: ai.tableflow.desktop
+productName: TableFlow
+directories:
+  output: release
+files:
+  - dist/**/*
+  - resources/**/*
+win:
+  target: nsis
