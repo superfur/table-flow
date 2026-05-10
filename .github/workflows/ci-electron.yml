@@ -1,31 +1,31 @@
-# TODO(detail-impl): typecheck / lint / e2e
-name: CI · Electron
+name: Electron CI
 
 on:
   push:
     branches: [main]
-    paths:
-      - "apps/**"
-      - "package.json"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/ci-electron.yml"
   pull_request:
-    paths:
-      - "apps/**"
-      - "package.json"
-      - "pnpm-workspace.yaml"
+    branches: [main]
 
 jobs:
-  typecheck:
-    runs-on: ubuntu-latest
+  build:
+    name: Build & Typecheck
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r typecheck
+          node-version: "22"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Typecheck
+        run: yarn workspace @table-flow/desktop typecheck
+
+      - name: Build
+        run: yarn workspace @table-flow/desktop build
+
+      - name: Integration tests
+        run: yarn workspace @table-flow/desktop test:integration

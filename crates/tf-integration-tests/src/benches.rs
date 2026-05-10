@@ -234,3 +234,92 @@ async fn bench_concurrent_rec_requests() {
         per_req_us
     );
 }
+
+#[tokio::test]
+async fn bench_single_frame_processing_latency() {
+    let mut sm = TableStateMachine::new("bench-frame".to_string());
+    sm.process_event(TableEvent::NewHandDetected {
+        dealer_seat: SeatId::new(0),
+    })
+    .unwrap();
+
+    let iterations = 1000;
+    let start = Instant::now();
+
+    for _ in 0..iterations {
+        let raw = RawFeatures {
+            cards: CardDetectionResult {
+                hole_cards: Some([
+                    Card { suit: Suit::Spades, rank: Rank::Ace, confidence: 0.95 },
+                    Card { suit: Suit::Hearts, rank: Rank::King, confidence: 0.94 },
+                ]),
+                community_cards: vec![],
+            },
+            stacks: vec![
+                StackChange {
+                    seat_id: SeatId::new(0),
+                    prev_estimated: 500.0,
+                    curr_estimated: 500.0,
+                    delta: 0.0,
+                    confidence: 0.9,
+                },
+            ],
+            pot: Some(PotChange {
+                prev_value: 0.0,
+                new_value: 30.0,
+                delta: 30.0,
+                timestamp_ms: 1000,
+            }),
+            seats: vec![],
+            dealer: Some(SeatId::new(0)),
+            hero: Some(SeatId::new(0)),
+            timestamp_ms: 1000,
+        };
+
+        let aggregator = FeatureAggregator::new("bench-frame".to_string());
+        let features = aggregator.merge(raw);
+
+        if let Some(cards) = features.hole_cards {
+            let _ = sm.process_event(TableEvent::HoleCardsDetected { cards });
+        }
+        if let Some(ref pc) = features.pot_change {
+            let _ = sm.process_event(TableEvent::PotChanged {
+                new_total: pc.new_value,
+                delta: pc.delta,
+            });
+        }
+
+        let state = sm.snapshot();
+        let _ = build_rec_input(&state);
+    }
+
+    let elapsed = start.elapsed();
+    let per_frame_us = elapsed.as_micros() as f64 / iterations as f64;
+    assert!(
+        per_frame_us < 1000.0,
+        "single frame processing should be < 1ms (mock), got {:.0}μs",
+        per_frame_us
+    );
+}
+
+#[tokio::test]
+async fn bench_end_to_end_recommendation_latency() {
+    let engine = fixtures::make_rec_engine();
+    let state = fixtures::make_preflop_state();
+
+    let iterations = 1000;
+    let start = Instant::now();
+
+    for _ in 0..iterations {
+        let input = build_rec_input(&state).unwrap();
+        let _ = engine.recommend(input).await.unwrap();
+    }
+
+    let elapsed = start.elapsed();
+    let per_rec_us = elapsed.as_micros() as f64 / iterations as f64;
+    assert!(
+        per_rec_us < 500.0,
+        "end-to-end recommendation should be < 500μs (mock engine), got {:.0}μs",
+        per_rec_us
+    );
+}

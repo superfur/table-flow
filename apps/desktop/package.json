@@ -8,7 +8,8 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
-    "start": "electron ."
+    "start": "electron .",
+    "test:integration": "electron-vite build && electron tests/integration.test.js"
   },
   "dependencies": {
     "@solidjs/router": "^0.13.0",

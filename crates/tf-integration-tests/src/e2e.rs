@@ -2,7 +2,7 @@
 
 use tf_core::{Card, Rank, SeatId, SeatStatus, Street, Suit, TableEvent};
 use tf_rec::{build_rec_input, recommend_from_state, RecOutput};
-use tf_state::{BettingRoundEngine, TableStateMachine};
+use tf_state::{BettingRoundEngine, SeatState, TableStateMachine};
 use tf_table::TableHandle;
 use tf_vision::{
     CardDetectionResult, FeatureAggregator, PotChange, RawFeatures, SeatChange, StackChange,
@@ -482,4 +482,368 @@ async fn test_state_validator_integration() {
             panic!("valid state should not have issues: {:?}", issues);
         }
     }
+}
+
+#[tokio::test]
+async fn test_full_pipeline_vision_to_recommendation() {
+    let engine = fixtures::make_rec_engine();
+    let mut sm = TableStateMachine::new("pipeline-e2e".to_string());
+
+    sm.process_event(TableEvent::NewHandDetected {
+        dealer_seat: SeatId::new(1),
+    })
+    .unwrap();
+
+    sm.process_event(TableEvent::SeatStatusChanged {
+        seat_id: SeatId::new(0),
+        new_status: SeatStatus::Active,
+    })
+    .unwrap();
+    sm.process_event(TableEvent::SeatStatusChanged {
+        seat_id: SeatId::new(1),
+        new_status: SeatStatus::Active,
+    })
+    .unwrap();
+
+    let raw = RawFeatures {
+        cards: CardDetectionResult {
+            hole_cards: Some([
+                Card { suit: Suit::Spades, rank: Rank::Ace, confidence: 0.97 },
+                Card { suit: Suit::Hearts, rank: Rank::King, confidence: 0.96 },
+            ]),
+            community_cards: vec![],
+        },
+        stacks: vec![
+            StackChange {
+                seat_id: SeatId::new(0),
+                prev_estimated: 500.0,
+                curr_estimated: 500.0,
+                delta: 0.0,
+                confidence: 0.9,
+            },
+            StackChange {
+                seat_id: SeatId::new(1),
+                prev_estimated: 500.0,
+                curr_estimated: 475.0,
+                delta: -25.0,
+                confidence: 0.9,
+            },
+        ],
+        pot: Some(PotChange {
+            prev_value: 0.0,
+            new_value: 50.0,
+            delta: 50.0,
+            timestamp_ms: 1000,
+        }),
+        seats: vec![],
+        dealer: Some(SeatId::new(1)),
+        hero: Some(SeatId::new(0)),
+        timestamp_ms: 1000,
+    };
+
+    let aggregator = FeatureAggregator::new("pipeline-e2e".to_string());
+    let features = aggregator.merge(raw);
+
+    assert!(features.hole_cards.is_some());
+    assert_eq!(features.street, Street::Preflop);
+
+    sm.process_event(TableEvent::HoleCardsDetected {
+        cards: features.hole_cards.unwrap(),
+    })
+    .unwrap();
+
+    sm.process_event(TableEvent::PotChanged {
+        new_total: features.pot_change.as_ref().map(|p| p.new_value).unwrap_or(0.0),
+        delta: features.pot_change.as_ref().map(|p| p.delta).unwrap_or(0.0),
+    })
+    .unwrap();
+
+    let mut state = sm.snapshot();
+    state.hero_seat = Some(SeatId::new(0));
+    state.seats = vec![
+        SeatState {
+            seat_id: SeatId::new(0),
+            status: SeatStatus::Active,
+            stack: 500.0,
+            current_bet: 0.0,
+            total_bet_this_hand: 0.0,
+            last_action: None,
+            is_hero: true,
+            has_cards: true,
+        },
+        SeatState {
+            seat_id: SeatId::new(1),
+            status: SeatStatus::Active,
+            stack: 475.0,
+            current_bet: 25.0,
+            total_bet_this_hand: 25.0,
+            last_action: None,
+            is_hero: false,
+            has_cards: true,
+        },
+    ];
+
+    let input = build_rec_input(&state);
+    assert!(input.is_some());
+    let rec_input = input.unwrap();
+    assert_eq!(rec_input.hole_cards[0].rank, Rank::Ace);
+    assert_eq!(rec_input.hole_cards[1].rank, Rank::King);
+
+    let output = engine.recommend(rec_input).await.unwrap();
+    assert_eq!(output.action, "raise");
+    assert!(output.confidence > 0.5);
+}
+
+#[tokio::test]
+async fn test_full_pipeline_multi_street_hand() {
+    let engine = fixtures::make_rec_engine();
+    let mut sm = TableStateMachine::new("multi-street-e2e".to_string());
+
+    sm.process_event(TableEvent::NewHandDetected {
+        dealer_seat: SeatId::new(0),
+    })
+    .unwrap();
+
+    sm.process_event(TableEvent::HoleCardsDetected {
+        cards: [
+            Card { suit: Suit::Spades, rank: Rank::Ace, confidence: 0.98 },
+            Card { suit: Suit::Spades, rank: Rank::King, confidence: 0.97 },
+        ],
+    })
+    .unwrap();
+
+    sm.process_event(TableEvent::PotChanged {
+        new_total: 30.0,
+        delta: 30.0,
+    })
+    .unwrap();
+
+    let mut preflop_state = sm.snapshot();
+    preflop_state.hero_seat = Some(SeatId::new(0));
+    preflop_state.seats = vec![
+        SeatState {
+            seat_id: SeatId::new(0),
+            status: SeatStatus::Active,
+            stack: 500.0,
+            current_bet: 0.0,
+            total_bet_this_hand: 15.0,
+            last_action: None,
+            is_hero: true,
+            has_cards: true,
+        },
+        SeatState {
+            seat_id: SeatId::new(1),
+            status: SeatStatus::Active,
+            stack: 485.0,
+            current_bet: 0.0,
+            total_bet_this_hand: 15.0,
+            last_action: None,
+            is_hero: false,
+            has_cards: true,
+        },
+    ];
+    preflop_state.blinds.current_max_bet = 15.0;
+    assert_eq!(preflop_state.street, Street::Preflop);
+
+    let preflop_input = build_rec_input(&preflop_state);
+    assert!(preflop_input.is_some());
+    let preflop_rec = engine.recommend(preflop_input.unwrap()).await.unwrap();
+    assert_eq!(preflop_rec.action, "raise");
+
+    let flop_cards = vec![
+        Card { suit: Suit::Hearts, rank: Rank::Two, confidence: 0.95 },
+        Card { suit: Suit::Diamonds, rank: Rank::Five, confidence: 0.94 },
+        Card { suit: Suit::Clubs, rank: Rank::Eight, confidence: 0.93 },
+    ];
+    sm.process_event(TableEvent::CommunityCardsChanged {
+        cards: flop_cards.clone(),
+        street: Street::Flop,
+    })
+    .unwrap();
+    assert_eq!(sm.state().street, Street::Flop);
+    assert_eq!(sm.state().community_cards.len(), 3);
+
+    sm.process_event(TableEvent::PotChanged {
+        new_total: 120.0,
+        delta: 90.0,
+    })
+    .unwrap();
+
+    let mut flop_state = sm.snapshot();
+    flop_state.hero_seat = Some(SeatId::new(0));
+    flop_state.seats = preflop_state.seats.clone();
+    let flop_input = build_rec_input(&flop_state);
+    assert!(flop_input.is_some());
+    let flop_rec = engine.recommend(flop_input.unwrap()).await.unwrap();
+    assert!(!flop_rec.action.is_empty());
+
+    sm.process_event(TableEvent::CommunityCardsChanged {
+        cards: {
+            let mut c = flop_cards.clone();
+            c.push(Card { suit: Suit::Spades, rank: Rank::Ten, confidence: 0.95 });
+            c
+        },
+        street: Street::Turn,
+    })
+    .unwrap();
+    assert_eq!(sm.state().street, Street::Turn);
+    assert_eq!(sm.state().community_cards.len(), 4);
+
+    sm.process_event(TableEvent::CommunityCardsChanged {
+        cards: {
+            let mut c = flop_cards.clone();
+            c.push(Card { suit: Suit::Spades, rank: Rank::Ten, confidence: 0.95 });
+            c.push(Card { suit: Suit::Diamonds, rank: Rank::Three, confidence: 0.94 });
+            c
+        },
+        street: Street::River,
+    })
+    .unwrap();
+    assert_eq!(sm.state().street, Street::River);
+    assert_eq!(sm.state().community_cards.len(), 5);
+
+    let mut river_state = sm.snapshot();
+    river_state.hero_seat = Some(SeatId::new(0));
+    river_state.seats = preflop_state.seats.clone();
+    let river_input = build_rec_input(&river_state);
+    assert!(river_input.is_some());
+    let river_rec = engine.recommend(river_input.unwrap()).await.unwrap();
+    assert!(!river_rec.action.is_empty());
+    assert!(river_rec.confidence > 0.0);
+}
+
+#[tokio::test]
+async fn test_full_pipeline_with_sidecar_recommendation() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+    let script = std::path::PathBuf::from(&manifest_dir)
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("rec-sidecar/index.js");
+    if !script.exists() {
+        eprintln!("Skipping sidecar pipeline test: script not found");
+        return;
+    }
+
+    let sidecar = tf_rec::RecSidecar::spawn(tf_rec::SidecarConfig {
+        script_path: script,
+        request_timeout: std::time::Duration::from_secs(5),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    let mut sm = TableStateMachine::new("sidecar-pipeline".to_string());
+    sm.process_event(TableEvent::NewHandDetected {
+        dealer_seat: SeatId::new(0),
+    })
+    .unwrap();
+    sm.process_event(TableEvent::HoleCardsDetected {
+        cards: [
+            Card { suit: Suit::Spades, rank: Rank::Ace, confidence: 0.99 },
+            Card { suit: Suit::Spades, rank: Rank::Ace, confidence: 0.98 },
+        ],
+    })
+    .unwrap();
+    sm.process_event(TableEvent::PotChanged {
+        new_total: 100.0,
+        delta: 100.0,
+    })
+    .unwrap();
+
+    let mut state = sm.snapshot();
+    state.hero_seat = Some(SeatId::new(0));
+    state.seats = vec![
+        SeatState {
+            seat_id: SeatId::new(0),
+            status: SeatStatus::Active,
+            stack: 500.0,
+            current_bet: 0.0,
+            total_bet_this_hand: 50.0,
+            last_action: None,
+            is_hero: true,
+            has_cards: true,
+        },
+        SeatState {
+            seat_id: SeatId::new(1),
+            status: SeatStatus::Active,
+            stack: 450.0,
+            current_bet: 0.0,
+            total_bet_this_hand: 50.0,
+            last_action: None,
+            is_hero: false,
+            has_cards: true,
+        },
+    ];
+
+    let input = build_rec_input(&state).unwrap();
+    let output = tf_rec::RecEngine::recommend(sidecar.as_ref(), input).await.unwrap();
+    assert_eq!(output.action, "raise");
+    assert!(output.amount > 0.0);
+
+    sidecar.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_full_pipeline_hand_history_recording() {
+    use tf_state::{HandHistoryRecorder, HandHistoryWriter};
+
+    let mut sm = TableStateMachine::new("history-pipeline".to_string());
+    let mut recorder = HandHistoryRecorder::new("history-pipeline".to_string());
+
+    let event = TableEvent::NewHandDetected {
+        dealer_seat: SeatId::new(0),
+    };
+    let transitions = sm.process_event(event.clone()).unwrap();
+    recorder.on_event(&event, &transitions, sm.state());
+
+    let event = TableEvent::HoleCardsDetected {
+        cards: [
+            Card { suit: Suit::Spades, rank: Rank::Ace, confidence: 0.99 },
+            Card { suit: Suit::Hearts, rank: Rank::King, confidence: 0.98 },
+        ],
+    };
+    let transitions = sm.process_event(event.clone()).unwrap();
+    recorder.on_event(&event, &transitions, sm.state());
+
+    let event = TableEvent::PotChanged {
+        new_total: 50.0,
+        delta: 50.0,
+    };
+    let transitions = sm.process_event(event.clone()).unwrap();
+    recorder.on_event(&event, &transitions, sm.state());
+
+    let event = TableEvent::CommunityCardsChanged {
+        cards: vec![
+            Card { suit: Suit::Hearts, rank: Rank::Two, confidence: 0.9 },
+            Card { suit: Suit::Diamonds, rank: Rank::Five, confidence: 0.9 },
+            Card { suit: Suit::Clubs, rank: Rank::Eight, confidence: 0.9 },
+        ],
+        street: Street::Flop,
+    };
+    let transitions = sm.process_event(event.clone()).unwrap();
+    recorder.on_event(&event, &transitions, sm.state());
+
+    let record = recorder.finalize_current().unwrap();
+    assert!(record.is_complete());
+    assert_eq!(record.hole_cards.unwrap()[0].rank, Rank::Ace);
+    assert_eq!(record.community_cards.len(), 3);
+    assert!((record.pot_total - 50.0).abs() < 0.01);
+
+    let dir = std::env::temp_dir().join("tf-pipeline-history-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pipeline.jsonl");
+    let mut writer = HandHistoryWriter::open(&path).unwrap();
+    writer.append(&record).unwrap();
+
+    let loaded = tf_state::read_hand_history(&path).unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].hand_id, 1);
+    assert_eq!(loaded[0].community_cards.len(), 3);
+
+    let stats = tf_state::SessionStats::from_records(&loaded);
+    assert_eq!(stats.total_hands, 1);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

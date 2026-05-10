@@ -300,3 +300,129 @@ async fn test_cancel_token_clone_independence() {
 
     handle.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn test_8_table_concurrent_lifecycle() {
+    let inference_pool = fixtures::make_inference_pool();
+    let rec_engine = fixtures::make_rec_engine();
+
+    let num_tables = 8;
+    let mut handles = Vec::new();
+
+    let start = std::time::Instant::now();
+    for i in 0..num_tables {
+        let handle = tf_table::TableHandle::start(
+            format!("8table-{}", i),
+            make_unique_calibration(i),
+            Arc::clone(&inference_pool),
+            Arc::clone(&rec_engine),
+        )
+        .await
+        .unwrap();
+        handles.push(handle);
+    }
+    let spawn_elapsed = start.elapsed();
+
+    for (i, handle) in handles.iter().enumerate() {
+        let sm = handle.state_machine();
+        let state = sm.lock();
+        assert_eq!(state.state().table_id, format!("8table-{}", i));
+    }
+
+    let start = std::time::Instant::now();
+    for handle in handles {
+        handle.shutdown().await.unwrap();
+    }
+    let shutdown_elapsed = start.elapsed();
+
+    assert!(
+        spawn_elapsed.as_millis() < 5000,
+        "8 table spawn should be < 5s, got {}ms",
+        spawn_elapsed.as_millis()
+    );
+    assert!(
+        shutdown_elapsed.as_millis() < 3000,
+        "8 table shutdown should be < 3s, got {}ms",
+        shutdown_elapsed.as_millis()
+    );
+}
+
+#[tokio::test]
+async fn test_8_table_concurrent_state_updates() {
+    let num_tables = 8;
+    let sms: Vec<Arc<parking_lot::Mutex<TableStateMachine>>> = (0..num_tables)
+        .map(|i| Arc::new(parking_lot::Mutex::new(TableStateMachine::new(format!("c8-{}", i)))))
+        .collect();
+
+    let mut join_handles = Vec::new();
+
+    for (idx, sm_arc) in sms.into_iter().enumerate() {
+        let handle = tokio::task::spawn_blocking(move || {
+            let mut sm = sm_arc.lock();
+            sm.process_event(TableEvent::NewHandDetected {
+                dealer_seat: SeatId::new(idx as u8),
+            })
+            .unwrap();
+            sm.process_event(TableEvent::HoleCardsDetected {
+                cards: [
+                    Card { suit: Suit::Spades, rank: Rank::Ace, confidence: 0.95 },
+                    Card { suit: Suit::Hearts, rank: Rank::King, confidence: 0.94 },
+                ],
+            })
+            .unwrap();
+            sm.process_event(TableEvent::PotChanged { new_total: 100.0, delta: 100.0 }).unwrap();
+            sm.process_event(TableEvent::CommunityCardsChanged {
+                cards: vec![
+                    Card { suit: Suit::Hearts, rank: Rank::Two, confidence: 0.9 },
+                    Card { suit: Suit::Diamonds, rank: Rank::Five, confidence: 0.9 },
+                    Card { suit: Suit::Clubs, rank: Rank::Eight, confidence: 0.9 },
+                ],
+                street: tf_core::Street::Flop,
+            })
+            .unwrap();
+            let state = sm.snapshot();
+            (state.table_id.clone(), state.street, state.pot.total)
+        });
+        join_handles.push(handle);
+    }
+
+    for (i, jh) in join_handles.into_iter().enumerate() {
+        let (table_id, street, pot) = jh.await.unwrap();
+        assert_eq!(table_id, format!("c8-{}", i));
+        assert_eq!(street, tf_core::Street::Flop);
+        assert!((pot - 100.0).abs() < 0.01);
+    }
+}
+
+#[tokio::test]
+async fn test_8_table_no_deadlock() {
+    let inference_pool = fixtures::make_inference_pool();
+    let rec_engine = fixtures::make_rec_engine();
+
+    let num_tables = 8;
+    let mut handles = Vec::new();
+
+    for i in 0..num_tables {
+        let handle = tf_table::TableHandle::start(
+            format!("deadlock-{}", i),
+            make_unique_calibration(i),
+            Arc::clone(&inference_pool),
+            Arc::clone(&rec_engine),
+        )
+        .await
+        .unwrap();
+        handles.push(handle);
+    }
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        async {
+            for handle in handles {
+                handle.shutdown().await.unwrap();
+            }
+        },
+    )
+    .await;
+
+    assert!(result.is_ok(), "8 table shutdown should complete within 5s (no deadlock)");
+}
