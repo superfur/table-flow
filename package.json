@@ -7,15 +7,14 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "pnpm --filter @table-flow/desktop dev",
-    "build": "pnpm --filter @table-flow/desktop build",
-    "typecheck": "pnpm -r --parallel typecheck",
-    "lint": "pnpm -r --parallel lint",
+    "dev": "yarn workspace @table-flow/desktop dev",
+    "build": "yarn workspace @table-flow/desktop build",
+    "typecheck": "yarn workspaces run typecheck",
+    "lint": "yarn workspaces run lint",
     "build:native": "cargo build --release -p tf-napi"
   },
   "engines": {
-    "node": ">=20",
-    "pnpm": ">=9"
+    "node": ">=20"
   },
-  "packageManager": "pnpm@9.0.0"
+  "packageManager": "yarn@1.22.22"
 }

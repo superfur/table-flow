@@ -1,20 +1,36 @@
-// TODO(detail-impl): contextBridge.exposeInMainWorld('electronAPI', { ... })
-// 当前只声明 window.electronAPI 的 TS 形状供 renderer 使用。
+import { contextBridge, ipcRenderer } from "electron";
 
-export interface ElectronAPI {
-  onStateUpdate(cb: (event: unknown) => void): () => void;
-  onRecommendationUpdate(cb: (event: unknown) => void): () => void;
-  discoverTables(): Promise<string[]>;
-  startCapture(config: { tableId: string; windowTitle: string }): Promise<void>;
-  stopCapture(tableId: string): Promise<void>;
-  getTableState(tableId: string): Promise<unknown>;
-  calibrateTable(tableId: string): Promise<unknown>;
-}
-
-declare global {
-  interface Window {
-    electronAPI: ElectronAPI;
-  }
-}
-
-export {};
+contextBridge.exposeInMainWorld("electronAPI", {
+  onStateUpdate: (cb: (event: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: unknown) =>
+      cb(data);
+    ipcRenderer.on("stateUpdate", handler);
+    return () => ipcRenderer.removeListener("stateUpdate", handler);
+  },
+  onRecommendationUpdate: (cb: (event: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: unknown) =>
+      cb(data);
+    ipcRenderer.on("recommendationUpdate", handler);
+    return () => ipcRenderer.removeListener("recommendationUpdate", handler);
+  },
+  onError: (cb: (event: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: unknown) =>
+      cb(data);
+    ipcRenderer.on("error", handler);
+    return () => ipcRenderer.removeListener("error", handler);
+  },
+  discoverTables: () => ipcRenderer.invoke("discoverTables"),
+  startCapture: (config: { tableId: string; windowTitle: string }) =>
+    ipcRenderer.invoke("startCapture", config),
+  stopCapture: (tableId: string) =>
+    ipcRenderer.invoke("stopCapture", tableId),
+  getTableState: (tableId: string) =>
+    ipcRenderer.invoke("getTableState", tableId),
+  calibrateTable: (tableId: string) =>
+    ipcRenderer.invoke("calibrateTable", tableId),
+  shutdown: () => ipcRenderer.invoke("shutdown"),
+  getRecommendation: (input: unknown) =>
+    ipcRenderer.invoke("getRecommendation", input),
+  sidecarHealth: () => ipcRenderer.invoke("sidecarHealth"),
+  getSessionStats: () => ipcRenderer.invoke("getSessionStats"),
+});

@@ -1,4 +1,6 @@
-// TODO(detail-impl): 透明 Overlay 窗口创建与位置同步
+import { app, BrowserWindow } from "electron";
+import * as path from "node:path";
+
 export interface OverlayConfig {
   targetWindowTitle: string;
   tableId: string;
@@ -11,8 +13,37 @@ export interface OverlayWindow {
 }
 
 export async function createOverlayWindow(
-  _config: OverlayConfig,
+  config: OverlayConfig,
 ): Promise<OverlayWindow> {
-  // TODO(detail-impl)
-  throw new Error("createOverlayWindow not implemented");
+  const win = new BrowserWindow({
+    width: 400,
+    height: 300,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    focusable: false,
+    webPreferences: {
+      preload: path.join(__dirname, "../preload/index.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  win.setIgnoreMouseEvents(true);
+
+  if (app.isPackaged) {
+    await win.loadFile(path.join(__dirname, "../renderer/index.html"));
+  } else {
+    await win.loadURL("http://localhost:5173/overlay");
+  }
+
+  return {
+    id: win.id,
+    tableId: config.tableId,
+    async close() {
+      win.close();
+    },
+  };
 }

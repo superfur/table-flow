@@ -7,10 +7,14 @@ Cargo.lock
 # Node
 node_modules
 pnpm-lock.yaml
+package-lock.json
 .pnpm-store
 dist
 out
 .vite
+
+# ONNX Runtime binary (large; downloaded separately)
+deps/
 
 # Native build artifacts
 *.node

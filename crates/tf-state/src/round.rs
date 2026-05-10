@@ -2,37 +2,180 @@
 //!
 //! 所有方法都是无状态的纯函数（输入 TableState，输出布尔/数值）。
 
-use tf_core::SeatId;
+use tf_core::{ActionType, SeatId, SeatStatus};
 
 use crate::state::TableState;
+
+const EPS: f64 = 0.01;
 
 pub struct BettingRoundEngine;
 
 impl BettingRoundEngine {
-    /// 当前 street 的下注回合是否已经关闭：
-    ///   - 所有未弃牌的玩家在本 street 至少 act 一次（PostBlind 不算）
-    ///   - 所有 active 玩家的 current_bet 与 current_max_bet 相等
-    ///
-    /// TODO(detail-impl)
-    pub fn is_round_complete(_state: &TableState) -> bool {
-        todo!("BettingRoundEngine::is_round_complete")
+    pub fn is_round_complete(state: &TableState) -> bool {
+        let active: Vec<&crate::state::SeatState> = state
+            .seats
+            .iter()
+            .filter(|s| matches!(s.status, SeatStatus::Active))
+            .collect();
+
+        if active.len() < 2 {
+            return true;
+        }
+
+        let max_bet = state.blinds.current_max_bet;
+        let all_matched = active
+            .iter()
+            .all(|s| (s.current_bet - max_bet).abs() < EPS);
+
+        let all_acted = active.iter().all(|s| {
+            state.action_history.iter().any(|a| {
+                a.seat_id == s.seat_id
+                    && a.street == state.street
+                    && !matches!(a.action, ActionType::PostBlind(_))
+            })
+        });
+
+        all_matched && all_acted
     }
 
-    /// hero 视角的 to_call：max(current_max_bet - hero.current_bet, 0)
-    /// TODO(detail-impl)
-    pub fn to_call_for(_state: &TableState, _seat: SeatId) -> f64 {
-        todo!("BettingRoundEngine::to_call_for")
+    pub fn to_call_for(state: &TableState, seat: SeatId) -> f64 {
+        let seat_state = match state.seats.iter().find(|s| s.seat_id == seat) {
+            Some(s) => s,
+            None => return 0.0,
+        };
+        (state.blinds.current_max_bet - seat_state.current_bet).max(0.0)
     }
 
-    /// min_raise = max(last_raise_size, big_blind)
-    /// TODO(detail-impl)
-    pub fn min_raise(_state: &TableState) -> f64 {
-        todo!("BettingRoundEngine::min_raise")
+    pub fn min_raise(state: &TableState) -> f64 {
+        state
+            .blinds
+            .last_raise_size
+            .max(state.blinds.big_blind)
     }
 
-    /// 计算给定 seat 在本手牌中的"已投入金额"（用于 side pot 分配）
-    /// TODO(detail-impl)
-    pub fn total_committed(_state: &TableState, _seat: SeatId) -> f64 {
-        todo!("BettingRoundEngine::total_committed")
+    pub fn total_committed(state: &TableState, seat: SeatId) -> f64 {
+        state
+            .seats
+            .iter()
+            .find(|s| s.seat_id == seat)
+            .map(|s| s.total_bet_this_hand)
+            .unwrap_or(0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::SeatState;
+    use tf_core::{BlindsInfo, SeatId, SeatStatus, Street, TablePhase, ActionType};
+
+    fn make_6max_state() -> TableState {
+        let mut state = TableState::initial("test".to_string());
+        state.phase = TablePhase::Playing;
+        state.street = Street::Preflop;
+        state.blinds = BlindsInfo {
+            small_blind: 1.0,
+            big_blind: 2.0,
+            current_max_bet: 2.0,
+            last_raise_size: 2.0,
+            ..Default::default()
+        };
+        for i in 0..6u8 {
+            state.seats.push(SeatState {
+                seat_id: SeatId::new(i),
+                status: SeatStatus::Active,
+                stack: 100.0,
+                current_bet: 0.0,
+                total_bet_this_hand: 0.0,
+                last_action: None,
+                is_hero: i == 0,
+                has_cards: true,
+            });
+        }
+        state
+    }
+
+    #[test]
+    fn test_to_call_for_bb() {
+        let state = make_6max_state();
+        let to_call = BettingRoundEngine::to_call_for(&state, SeatId::new(0));
+        assert!((to_call - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_to_call_for_after_bet() {
+        let mut state = make_6max_state();
+        state.seats[0].current_bet = 2.0;
+        let to_call = BettingRoundEngine::to_call_for(&state, SeatId::new(0));
+        assert!((to_call - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_min_raise_default() {
+        let state = make_6max_state();
+        let mr = BettingRoundEngine::min_raise(&state);
+        assert!((mr - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_min_raise_after_3bet() {
+        let mut state = make_6max_state();
+        state.blinds.last_raise_size = 4.0;
+        let mr = BettingRoundEngine::min_raise(&state);
+        assert!((mr - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_total_committed() {
+        let mut state = make_6max_state();
+        state.seats[0].total_bet_this_hand = 10.0;
+        let committed = BettingRoundEngine::total_committed(&state, SeatId::new(0));
+        assert!((committed - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_is_round_complete_no_actions() {
+        let state = make_6max_state();
+        assert!(!BettingRoundEngine::is_round_complete(&state));
+    }
+
+    #[test]
+    fn test_is_round_complete_all_acted_and_matched() {
+        let mut state = make_6max_state();
+        for seat in &mut state.seats {
+            seat.current_bet = 2.0;
+        }
+        for i in 0..6u8 {
+            state.action_history.push(crate::state::ActionRecord {
+                seat_id: SeatId::new(i),
+                action: ActionType::Call,
+                amount: 2.0,
+                street: Street::Preflop,
+                seq: i as u32 + 1,
+                confidence: 0.9,
+            });
+        }
+        assert!(BettingRoundEngine::is_round_complete(&state));
+    }
+
+    #[test]
+    fn test_is_round_complete_one_folded() {
+        let mut state = make_6max_state();
+        for seat in &mut state.seats {
+            seat.current_bet = 2.0;
+        }
+        state.seats[0].status = SeatStatus::Folded;
+        state.seats[0].current_bet = 0.0;
+        for i in 1..6u8 {
+            state.action_history.push(crate::state::ActionRecord {
+                seat_id: SeatId::new(i),
+                action: ActionType::Call,
+                amount: 2.0,
+                street: Street::Preflop,
+                seq: i as u32,
+                confidence: 0.9,
+            });
+        }
+        assert!(BettingRoundEngine::is_round_complete(&state));
     }
 }

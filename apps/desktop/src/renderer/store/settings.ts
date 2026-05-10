@@ -1,4 +1,17 @@
-// TODO(detail-impl): app-wide settings (calibration, theme, blinds defaults...)
-export interface SettingsStore {
-  // populated in P8 detail
+import { createStore } from "solid-js/store";
+
+export interface Settings {
+  theme: "dark" | "light";
+  fpsPerTable: number;
+  maxTables: number;
+  heroSeatOverride: number | null;
 }
+
+const [settings, setSettings] = createStore<Settings>({
+  theme: "dark",
+  fpsPerTable: 30,
+  maxTables: 8,
+  heroSeatOverride: null,
+});
+
+export { settings, setSettings };

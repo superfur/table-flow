@@ -1,11 +1,46 @@
-// TODO(detail-impl): app lifecycle / window manager / native addon loading
-// 占位入口，确保 typecheck 通过。
+import { app, BrowserWindow } from "electron";
 import { createMainWindow } from "./window";
 import { loadNative } from "./native";
 import { registerIpcHandlers } from "./ipc";
+import { createTray } from "./tray";
+import { RecSidecar } from "./sidecar";
 
-export async function bootstrap(): Promise<void> {
+app.whenReady().then(async () => {
   const native = await loadNative();
   const main = await createMainWindow();
-  registerIpcHandlers(main, native);
-}
+
+  const sidecar = new RecSidecar();
+  try {
+    await sidecar.start();
+    console.log("[TableFlow] Sidecar started");
+  } catch (err) {
+    console.warn("[TableFlow] Sidecar failed to start:", err);
+  }
+
+  registerIpcHandlers(main, native, sidecar);
+  createTray();
+
+  app.on("before-quit", async () => {
+    await sidecar.shutdown();
+  });
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+
+app.on("activate", async () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    const native = await loadNative();
+    const main = await createMainWindow();
+    const sidecar = new RecSidecar();
+    try {
+      await sidecar.start();
+    } catch (err) {
+      console.warn("[TableFlow] Sidecar failed to start:", err);
+    }
+    registerIpcHandlers(main, native, sidecar);
+  }
+});

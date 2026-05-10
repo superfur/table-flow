@@ -12,9 +12,16 @@ tf-inference.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 flume.workspace = true
 crossbeam.workspace = true
 parking_lot.workspace = true
 crc32fast.workspace = true
+regex = "1"
+png = "0.17"
+
+[features]
+default = []
+macos-capture = []

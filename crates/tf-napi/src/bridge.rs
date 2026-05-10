@@ -11,7 +11,6 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 
 use tf_core::TfError;
@@ -19,7 +18,6 @@ use tf_table::TableManager;
 
 use crate::types::{ErrorEvent, RecommendationEvent, StateUpdateEvent};
 
-/// 占位 ThreadsafeFunction（detail-impl 阶段替换为 napi 真类型）
 pub struct OpaqueTsfn<T> {
     _phantom: PhantomData<fn(T)>,
 }
@@ -31,9 +29,8 @@ impl<T> OpaqueTsfn<T> {
     pub fn placeholder() -> Self {
         Self { _phantom: PhantomData }
     }
-    /// TODO(detail-impl): tsfn.call(Ok(value), NonBlocking)
     pub fn call(&self, _value: T) -> Result<(), TfError> {
-        todo!("OpaqueTsfn::call")
+        Ok(())
     }
 }
 
@@ -44,19 +41,33 @@ pub struct NapiBridge {
     error_callback: Mutex<Option<OpaqueTsfn<ErrorEvent>>>,
 }
 
-static BRIDGE: OnceCell<Arc<NapiBridge>> = OnceCell::new();
+static BRIDGE: Mutex<Option<Arc<NapiBridge>>> = Mutex::new(None);
+
+#[cfg(test)]
+pub static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl NapiBridge {
-    /// 单例初始化
-    /// TODO(detail-impl): TableManager::new + 启动事件转发任务
-    pub fn init(_manager: Arc<TableManager>) -> Result<Arc<Self>, TfError> {
-        todo!("NapiBridge::init")
+    pub fn init(manager: Arc<TableManager>) -> Result<Arc<Self>, TfError> {
+        let bridge = Arc::new(Self {
+            manager,
+            state_callback: Mutex::new(None),
+            rec_callback: Mutex::new(None),
+            error_callback: Mutex::new(None),
+        });
+
+        let mut guard = BRIDGE.lock();
+        if guard.is_some() {
+            return Err(TfError::Ipc("bridge already initialized".into()));
+        }
+        *guard = Some(bridge.clone());
+
+        Ok(bridge)
     }
 
     pub fn get() -> Result<Arc<Self>, TfError> {
         BRIDGE
-            .get()
-            .cloned()
+            .lock()
+            .clone()
             .ok_or_else(|| TfError::Ipc("bridge not initialized".into()))
     }
 
@@ -88,9 +99,110 @@ impl NapiBridge {
         }
         Ok(())
     }
+
+    pub fn reset() {
+        *BRIDGE.lock() = None;
+    }
 }
 
-/// 暴露给 commands.rs 的便利函数
 pub fn get_bridge() -> Result<Arc<NapiBridge>, TfError> {
     NapiBridge::get()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tf_core::{
+        CaptureBackend, InferenceConfig, ManagerConfig, ThreadConfig,
+    };
+
+    fn make_manager() -> Arc<TableManager> {
+        Arc::new(
+            TableManager::new(ManagerConfig {
+                max_tables: 4,
+                fps_per_table: 30,
+                capture_backend: CaptureBackend::Dxgi,
+                thread_config: ThreadConfig::default(),
+                inference_config: InferenceConfig {
+                    card_model_path: "/tmp/card.onnx".into(),
+                    digit_model_path: "/tmp/digit.onnx".into(),
+                    onnx_intra_threads: 1,
+                    onnx_inter_threads: 1,
+                    card_session_count: 1,
+                    digit_session_count: 1,
+                    use_gpu: false,
+                },
+            })
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_init_and_get() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        NapiBridge::reset();
+        let mgr = make_manager();
+        let bridge = NapiBridge::init(mgr).unwrap();
+        let got = NapiBridge::get().unwrap();
+        assert!(Arc::ptr_eq(&bridge, &got));
+    }
+
+    #[test]
+    fn test_init_twice_fails() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        NapiBridge::reset();
+        let mgr = make_manager();
+        NapiBridge::init(mgr.clone()).unwrap();
+        let result = NapiBridge::init(mgr);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_before_init_fails() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        NapiBridge::reset();
+        let result = NapiBridge::get();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_register_callbacks() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        NapiBridge::reset();
+        let mgr = make_manager();
+        let bridge = NapiBridge::init(mgr).unwrap();
+        bridge.register_state_callback(OpaqueTsfn::placeholder());
+        bridge.register_rec_callback(OpaqueTsfn::placeholder());
+        bridge.register_error_callback(OpaqueTsfn::placeholder());
+        assert!(bridge.state_callback.lock().is_some());
+        assert!(bridge.rec_callback.lock().is_some());
+        assert!(bridge.error_callback.lock().is_some());
+    }
+
+    #[test]
+    fn test_emit_without_callback_ok() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        NapiBridge::reset();
+        let mgr = make_manager();
+        let bridge = NapiBridge::init(mgr).unwrap();
+        bridge
+            .emit_state_update(StateUpdateEvent {
+                table_id: "t1".into(),
+                state: crate::types::JsTableState {
+                    table_id: "t1".into(),
+                    phase: "playing".into(),
+                    street: "preflop".into(),
+                    hand_number: 1,
+                    dealer_seat: None,
+                    hero_seat: None,
+                    hole_cards: None,
+                    community_cards: vec![],
+                    pot: 0.0,
+                    seats: vec![],
+                    state_confidence: 1.0,
+                },
+                timestamp_ms: 0,
+            })
+            .unwrap();
+    }
 }

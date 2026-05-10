@@ -134,3 +134,71 @@ pub fn action_to_str(a: &ActionType) -> String {
 pub fn js_seat_id(s: SeatId) -> u8 {
     s.0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tf_core::{Rank, Suit};
+
+    #[test]
+    fn test_js_card_from_card() {
+        let card = Card { suit: Suit::Spades, rank: Rank::Ace, confidence: 1.0 };
+        let js: JsCard = card.into();
+        assert_eq!(js.suit, "s");
+        assert_eq!(js.rank, "A");
+    }
+
+    #[test]
+    fn test_street_to_str() {
+        assert_eq!(street_to_str(Street::Preflop), "preflop");
+        assert_eq!(street_to_str(Street::Flop), "flop");
+        assert_eq!(street_to_str(Street::Turn), "turn");
+        assert_eq!(street_to_str(Street::River), "river");
+        assert_eq!(street_to_str(Street::Showdown), "showdown");
+    }
+
+    #[test]
+    fn test_phase_to_str() {
+        assert_eq!(phase_to_str(TablePhase::Waiting), "waiting");
+        assert_eq!(phase_to_str(TablePhase::Playing), "playing");
+    }
+
+    #[test]
+    fn test_status_to_str() {
+        assert_eq!(status_to_str(SeatStatus::Active), "active");
+        assert_eq!(status_to_str(SeatStatus::Folded), "folded");
+        assert_eq!(status_to_str(SeatStatus::AllIn), "allIn");
+    }
+
+    #[test]
+    fn test_action_to_str() {
+        assert_eq!(action_to_str(&ActionType::Fold), "fold");
+        assert_eq!(action_to_str(&ActionType::Call), "call");
+        assert!(action_to_str(&ActionType::Bet(50.0)).starts_with("bet:"));
+    }
+
+    #[test]
+    fn test_js_table_state_serialize() {
+        let state = JsTableState {
+            table_id: "t1".into(),
+            phase: "playing".into(),
+            street: "preflop".into(),
+            hand_number: 1,
+            dealer_seat: Some(0),
+            hero_seat: Some(2),
+            hole_cards: Some(vec![JsCard { suit: "s".into(), rank: "A".into() }]),
+            community_cards: vec![],
+            pot: 100.0,
+            seats: vec![],
+            state_confidence: 0.95,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("\"tableId\":\"t1\""));
+        assert!(json.contains("\"handNumber\":1"));
+    }
+
+    #[test]
+    fn test_js_seat_id() {
+        assert_eq!(js_seat_id(SeatId::new(5)), 5);
+    }
+}

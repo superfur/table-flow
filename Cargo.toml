@@ -8,6 +8,7 @@ members = [
     "crates/tf-rec",
     "crates/tf-table",
     "crates/tf-napi",
+    "crates/tf-integration-tests",
 ]
 
 [workspace.package]
@@ -52,6 +53,10 @@ num_cpus = "1"
 crc32fast = "1"
 bytemuck = "1"
 
+# Dev dependencies
+proptest = "1"
+tokio-test = "0.4"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
@@ -60,3 +65,9 @@ strip = "symbols"
 
 [profile.dev]
 opt-level = 1
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[workspace.lints.rust]
+dead_code = { level = "allow", priority = -1 }

@@ -114,7 +114,6 @@ pub enum ManagerEvent {
     TableLost {
         table_id: String,
     },
-    /// 用 Box 避免单变体过大
     StateUpdated {
         table_id: String,
         snapshot_json: String,

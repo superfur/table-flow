@@ -2,10 +2,12 @@
 
 pub mod dxgi;
 pub mod fps;
+pub mod macos;
 pub mod window;
 
 pub use dxgi::*;
 pub use fps::*;
+pub use macos::*;
 pub use window::*;
 
 use async_trait::async_trait;

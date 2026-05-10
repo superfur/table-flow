@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use tf_core::SeatId;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStats {
     pub seat_id: SeatId,
     pub hands_played: u64,
@@ -14,6 +14,19 @@ pub struct PlayerStats {
     pub pfr: f64,
     pub af: f64,
     pub three_bet_pct: f64,
+}
+
+impl Default for PlayerStats {
+    fn default() -> Self {
+        Self {
+            seat_id: SeatId::new(0),
+            hands_played: 0,
+            vpip: 0.0,
+            pfr: 0.0,
+            af: 0.0,
+            three_bet_pct: 0.0,
+        }
+    }
 }
 
 pub struct StatsTracker;

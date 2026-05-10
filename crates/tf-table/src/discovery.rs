@@ -9,20 +9,82 @@ use tf_vision::WindowInfo;
 pub struct DiscoveredTable {
     pub table_id: String,
     pub window: WindowInfo,
-    /// 匹配到的 Calibration profile id；None 表示需要用户手动校准
     pub matched_profile_id: Option<String>,
 }
 
 pub struct TableDiscovery;
 
 impl TableDiscovery {
-    /// 周期性扫描所有窗口 → 与 known calibration profiles 匹配 →
-    /// 返回当前可识别为"扑克牌桌"的窗口列表。
-    /// TODO(detail-impl):
-    ///   - 调用 tf_vision::enumerate_windows
-    ///   - 用 tf_vision::match_profile 匹配
-    ///   - 生成 stable table_id（建议 hash window handle + title）
     pub async fn scan() -> Result<Vec<DiscoveredTable>, TfError> {
-        todo!("TableDiscovery::scan")
+        let windows = tf_vision::enumerate_windows(".*")?;
+
+        let tables: Vec<DiscoveredTable> = windows
+            .into_iter()
+            .map(|w| {
+                let table_id = format!("{:x}-{}", w.handle, simple_hash(&w.title));
+                DiscoveredTable {
+                    table_id,
+                    window: w,
+                    matched_profile_id: None,
+                }
+            })
+            .collect();
+
+        Ok(tables)
+    }
+
+    pub async fn scan_with_profiles(
+        profiles: &[tf_core::CalibrationProfile],
+    ) -> Result<Vec<DiscoveredTable>, TfError> {
+        let windows = tf_vision::enumerate_windows(".*")?;
+
+        let tables: Vec<DiscoveredTable> = windows
+            .into_iter()
+            .map(|w| {
+                let matched = tf_vision::match_profile(profiles, &w.title, None);
+                let table_id = format!("{:x}-{}", w.handle, simple_hash(&w.title));
+
+                DiscoveredTable {
+                    table_id,
+                    window: w,
+                    matched_profile_id: matched.map(|p| p.profile_id.clone()),
+                }
+            })
+            .collect();
+
+        Ok(tables)
+    }
+}
+
+fn simple_hash(s: &str) -> u64 {
+    let mut hash: u64 = 5381;
+    for b in s.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(b as u64);
+    }
+    hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_hash_deterministic() {
+        let h1 = simple_hash("PokerStars Table #123");
+        let h2 = simple_hash("PokerStars Table #123");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_simple_hash_differs() {
+        let h1 = simple_hash("PokerStars Table #123");
+        let h2 = simple_hash("GGPoker Table #456");
+        assert_ne!(h1, h2);
+    }
+
+    #[tokio::test]
+    async fn test_scan_returns_ok() {
+        let result = TableDiscovery::scan().await;
+        assert!(result.is_ok());
     }
 }

@@ -22,10 +22,17 @@ impl FpsLimiter {
         }
     }
 
-    /// 异步等到下一次可以捕获的时刻。
-    /// TODO(detail-impl): 用 tokio::time::sleep_until 实现，避免 busy-wait
     pub async fn wait(&mut self) {
-        todo!("FpsLimiter::wait")
+        if self.min_interval.is_zero() {
+            return;
+        }
+        if let Some(last) = self.last_capture {
+            let elapsed = last.elapsed();
+            if elapsed < self.min_interval {
+                tokio::time::sleep(self.min_interval - elapsed).await;
+            }
+        }
+        self.last_capture = Some(Instant::now());
     }
 
     pub fn target_fps(&self) -> u32 {
@@ -39,5 +46,37 @@ impl FpsLimiter {
         } else {
             Duration::from_secs_f64(1.0 / fps as f64)
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_fps_limiter() {
+        let limiter = FpsLimiter::new(30);
+        assert_eq!(limiter.target_fps(), 30);
+        assert!(!limiter.min_interval.is_zero());
+    }
+
+    #[test]
+    fn test_zero_fps() {
+        let limiter = FpsLimiter::new(0);
+        assert!(limiter.min_interval.is_zero());
+    }
+
+    #[test]
+    fn test_set_target_fps() {
+        let mut limiter = FpsLimiter::new(30);
+        limiter.set_target_fps(60);
+        assert_eq!(limiter.target_fps(), 60);
+    }
+
+    #[tokio::test]
+    async fn test_wait_first_call() {
+        let mut limiter = FpsLimiter::new(1000);
+        limiter.wait().await;
+        assert!(limiter.last_capture.is_some());
     }
 }
